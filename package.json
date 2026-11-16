@@ -1,0 +1,14 @@
+{
+  "name": "tessera-browser",
+  "productName": "Tessera Browser",
+  "version": "0.2.0",
+  "description": "Вертикальный браузер с профилями, юзерскриптами и панелью вкладок для Linux (Tessera / Debian на Android)",
+  "main": "main.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "bash run.sh"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0"
+  }
+}
