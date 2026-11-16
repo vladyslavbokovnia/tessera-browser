@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tessera Browser — превью</title>
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:system-ui,sans-serif}
+#phone{position:relative;height:100dvh;max-width:480px;margin:0 auto;background:#fff;overflow:hidden}
+#page{position:absolute;inset:0 0 80px 0;padding:22px 20px;color:#222;overflow:auto}
+#page h1{font-size:22px;margin:0 0 6px}#page .u{color:#777;font-size:13px;word-break:break-all;margin-bottom:16px}
+#page p{line-height:1.5}#page a{color:#1a56db}
+#page .note{margin-top:24px;padding:12px;border-radius:12px;background:#f1f3f9;font-size:13px;color:#445}
+#ui{position:absolute;left:0;right:0;bottom:0;width:100%;height:80px;border:0;background:transparent}
+</style></head><body>
+<div id="phone">
+  <div id="page"><h1 id="t"></h1><div class="u" id="u"></div>
+    <p>Это макет страницы: так выглядит окно браузера над нижней панелью. Настоящие сайты открываются только в Electron-версии.</p>
+    <p>Длинное нажатие на ссылку открывает меню ссылки: <a href="#" id="lnk">https://example.org/</a></p>
+    <p>Выдели текст и нажми «Читать страницу» в круглом меню, чтобы услышать озвучку.</p>
+    <div class="note">Превью работает без Electron. Тап по кнопке и долгое нажатие ведут себя как в приложении.</div></div>
+  <iframe id="ui" src="/ui/index.html" allowtransparency="true"></iframe>
+</div>
+<script>
+const ui=document.getElementById('ui');
+addEventListener('message',(e)=>{const m=e.data||{};if(m.type!=='layout')return;
+  ui.style.height=m.mode==='browse'?(80+(m.extra||0))+'px':'100%';
+  document.getElementById('t').textContent=m.title||'';document.getElementById('u').textContent=m.url||'';});
+document.getElementById('lnk').addEventListener('contextmenu',(e)=>{e.preventDefault();ui.contentWindow.postMessage({type:'ctx'},'*');});
+document.getElementById('lnk').addEventListener('click',(e)=>e.preventDefault());
+</script></body></html>
