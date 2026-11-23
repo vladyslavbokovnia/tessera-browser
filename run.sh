@@ -2,7 +2,7 @@
 # Запуск Tessera Browser: bash run.sh
 # Переменные окружения:
 #   TB_ELECTRON=путь  свой файл electron
-#   TB_SCALE=2.5     масштаб интерфейса (для экрана телефона)
+#   TB_SCALE=2.5     масштаб интерфейса (без него подбирается по ширине экрана, если есть xdpyinfo)
 #   TB_NO_GPU=1      выключить GPU-ускорение (если рисует с артефактами)
 #   TB_MAXIMIZE=1    развернуть окно / TB_FULLSCREEN=1 — на весь экран
 #   TB_FRAMELESS=1   окно без рамки
@@ -13,6 +13,14 @@ for c in "$TB_ELECTRON" "$HOME/electron/electron" node_modules/.bin/electron /op
   [ -n "$c" ] && [ -x "$c" ] && { ELECTRON="$c"; break; }
 done
 [ -n "$ELECTRON" ] || { echo "Electron не найден. См. README: установка без npm."; exit 1; }
+# Масштаб по умолчанию подбирается по ширине экрана X11, чтобы интерфейс был размером как на телефоне
+# (около 400 CSS-пикселей по ширине). Нужен xdpyinfo: apt install x11-utils. Свой масштаб: TB_SCALE=2
+if [ -z "$TB_SCALE" ] && command -v xdpyinfo >/dev/null 2>&1; then
+  W=$(xdpyinfo 2>/dev/null | awk '/dimensions:/{split($2,a,"x"); print a[1]; exit}')
+  if [ -n "$W" ] && [ "$W" -gt 500 ] 2>/dev/null; then
+    TB_SCALE=$(awk -v w="$W" 'BEGIN{s=w/400; if(s<1)s=1; if(s>4)s=4; printf "%.2f", s}')
+  fi
+fi
 FLAGS=(--no-sandbox --ozone-platform=x11 --disable-dev-shm-usage)
 [ -n "$TB_NO_GPU" ] && FLAGS+=(--disable-gpu)
 [ -n "$TB_SCALE" ] && FLAGS+=(--force-device-scale-factor="$TB_SCALE")
