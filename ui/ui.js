@@ -90,20 +90,10 @@ function ibtn(a, icon, say, { cls = '', extra = '' } = {}) {
 function voiceBtnCls() { return S.voice === 1 ? 'm1' : (S.voice === 0 ? 'off-voice' : ''); }
 const voiceIcon = () => (S.voice === 0 ? I.volOff : I.volOn);
 
-// ---------- нижняя панель: только на панели вкладок ----------
-function barHTML() {
-  const hub = `<button class="hub${ringOpen ? ' open' : ''}" data-a="hub" data-say="Меню">${HUB}</button>`;
-  return `<div class="bar">
-    ${ibtn('newtab', NEWTAB, 'Новая вкладка')}
-    ${ibtn('closed', I.history, 'Закрытые вкладки')}
-    ${hub}
-    ${ibtn('voice', voiceIcon(), VOICE_SAY[S.voice], { cls: voiceBtnCls() })}
-    ${ibtn('close', I.down, 'К странице')}
-  </div>`;
-}
-
-// ---------- плавающая кнопка на странице (как в браузере универсального приложения) ----------
-// Нажатие открывает вкладки, долгое нажатие открывает веер, перетаскивание двигает кнопку, при прокрутке она гаснет.
+// ---------- плавающая кнопка (как в браузере универсального приложения) ----------
+// На странице: нажатие открывает вкладки, долгое нажатие открывает веер, перетаскивание двигает кнопку, при прокрутке она гаснет.
+// Поверх экранов (вкладки, адрес, закладки, скрипты) кнопка тоже видна: на панели вкладок нажатие возвращает к странице.
+const SCREENS = new Set(['panel', 'omnibox', 'scripts', 'bookmarks', 'closed']);
 function hubG() {
   if (S.hub) return S.hub;
   const W = window.innerWidth || 460, H = window.innerHeight || 880;      // превью без главного процесса: кнопка внизу по центру
@@ -115,10 +105,11 @@ function hubFloatHTML() {
   const p = profile(a && a.profile);
   return `<button class="hub float${S.hubHidden ? ' hidden' : ''}" style="left:${g.ox + 5}px;top:${g.oy + 5}px" data-a="hubf" data-say="Вкладки">${HUB}${S.loading ? '<i class="hring"></i>' : ''}<i class="pdot" style="background:${esc(p.color)}"></i></button>`;
 }
-function hubRingHTML() {
+function hubScreenHTML() {
   const g = hubG();
-  return `<button class="hub float open" style="left:${g.ox + 5}px;top:${g.oy + 5}px" data-a="hub" data-say="Меню">${HUB}</button>`;
+  return `<button class="hub float${ringOpen ? ' open' : ''}" style="left:${g.ox + 5}px;top:${g.oy + 5}px" data-a="hubf" data-say="${S.mode === 'panel' ? 'К странице' : 'Вкладки'}">${HUB}</button>`;
 }
+function screenExtras() { return (ringOpen ? ringHTML() : '') + hubScreenHTML(); }
 function updateHub(hb) {
   const g = hubG();
   hb.style.left = (g.ox + 5) + 'px';
@@ -137,7 +128,7 @@ function ringItems() {
   const cmds = S.commands || [];
   const voice = ['voice', voiceIcon(), VOICE_SAY[S.voice], { cls: voiceBtnCls() }];
   if (S.mode === 'panel') {
-    return [['newtab', NEWTAB, 'Новая вкладка'], ['closed', I.history, 'Закрытые вкладки'], ['m-bms', I.bms, 'Закладки'], ['m-scripts', I.code, 'Скрипты'], voice];
+    return [['newtab', NEWTAB, 'Новая вкладка'], ['closed', I.history, 'Закрытые вкладки'], ['m-bms', I.bms, 'Закладки'], ['m-scripts', I.code, 'Скрипты'], voice, ['close', I.down, 'К странице']];
   }
   return [
     S.loading ? ['m-reload', I.close, 'Остановить'] : ['m-reload', I.reload, 'Обновить'],
@@ -210,7 +201,7 @@ function ringHTML() {
   const list = ringItems();
   const W = window.innerWidth || 460;
   const H = window.innerHeight || 880;
-  const c = S.mode === 'panel' ? { x: W / 2, y: H - 40 } : { x: hubG().cx, y: hubG().cy };
+  const c = { x: hubG().cx, y: hubG().cy };
   const pos = ringLayout(list.length, c.x, c.y, W, H);
   const btns = pos.map((p, i) => {
     const x = list[i];
@@ -337,7 +328,7 @@ function render(force) {
   if (!S || hubDragging) return;
   const kind = kindOf();
   if (kind === 'ring') ringOpen = true;
-  else if (kind !== 'panel') ringOpen = false;
+  else if (!SCREENS.has(kind)) ringOpen = false;
   if (!force && kind === 'browse' && rendered === 'browse' && !overlay) {
     const hb = app.querySelector('.hub.float');
     if (hb) { updateHub(hb); return; }
@@ -352,13 +343,13 @@ function render(force) {
   const keepScroll = prevBody && rendered === kind ? prevBody.scrollTop : 0;
   const enteringOmni = kind === 'omnibox' && rendered !== 'omnibox';
   rendered = kind;
-  const ring = ringOpen && (kind === 'ring' || kind === 'panel') ? ringHTML() : '';
+  const ring = ringOpen && kind === 'ring' ? ringHTML() : '';
 
   switch (kind) {
     case 'browse': app.innerHTML = hubFloatHTML(); break;
-    case 'ring': app.innerHTML = ring + hubRingHTML(); break;
+    case 'ring': app.innerHTML = ring + hubScreenHTML(); break;
     case 'ctx': app.innerHTML = ctxHTML(); break;
-    case 'panel': app.innerHTML = panelBody() + ring + barHTML('panel') + '</div>'; break;
+    case 'panel': app.innerHTML = panelBody() + '</div>'; break;
     case 'omnibox': {
       if (enteringOmni) {
         const a = activeTab();
@@ -379,14 +370,15 @@ function render(force) {
     case 'scripts': app.innerHTML = scriptsHTML(); break;
     case 'bookmarks':
       app.innerHTML = bookmarksHTML([]);
-      T.invoke('bookmarks').then((items) => { if (rendered === 'bookmarks') { app.innerHTML = bookmarksHTML(items || []) + overlayHTML(); } });
+      T.invoke('bookmarks').then((items) => { if (rendered === 'bookmarks') { app.innerHTML = bookmarksHTML(items || []) + screenExtras() + overlayHTML(); } });
       break;
     case 'closed':
       app.innerHTML = closedHTML([]);
-      T.invoke('closed').then((items) => { if (rendered === 'closed') app.innerHTML = closedHTML(items || []) + overlayHTML(); });
+      T.invoke('closed').then((items) => { if (rendered === 'closed') app.innerHTML = closedHTML(items || []) + screenExtras() + overlayHTML(); });
       break;
     default: app.innerHTML = '';
   }
+  if (SCREENS.has(kind)) app.insertAdjacentHTML('beforeend', screenExtras());
   if (overlay) app.insertAdjacentHTML('beforeend', overlayHTML());
   if (ringFresh) {
     requestAnimationFrame(() => requestAnimationFrame(() => { app.querySelectorAll('.ri.pre').forEach((el) => el.classList.remove('pre')); }));
@@ -470,7 +462,8 @@ app.addEventListener('pointerdown', (e) => {
   const kind = el.dataset.tab !== undefined ? 'tab' : (el.dataset.bm !== undefined ? 'bm' : (el.dataset.a === 'hubf' ? 'hubf' : 'a'));
   press = {
     kind, d: Object.assign({}, el.dataset), rect: el.getBoundingClientRect(), x: e.clientX, y: e.clientY,
-    sx: e.screenX, sy: e.screenY, long: false, drag: false,
+    sx: e.screenX, sy: e.screenY, long: false, drag: false, el,
+    l: parseFloat(el.style.left) || 0, t: parseFloat(el.style.top) || 0,
     timer: setTimeout(() => { if (press) { press.long = true; onLong(press); } }, LONG),
   };
   if (kind === 'hubf') { try { el.setPointerCapture(e.pointerId); } catch (err) { /* без захвата */ } }
@@ -481,12 +474,19 @@ app.addEventListener('pointermove', (e) => {
   if (press.kind === 'hubf') {
     // кнопку двигаем по экранным координатам: окно интерфейса само движется вместе с кнопкой
     const dx = e.screenX - press.sx, dy = e.screenY - press.sy;
+    if (ringOpen) return;                              // пока открыт веер, кнопку не двигаем
     if (!press.drag && Math.hypot(dx, dy) > 12) {
       press.drag = true; hubDragging = true;
       clearTimeout(press.timer); clearDown();
       T.invoke('hubDragStart');
     }
-    if (press.drag) T.invoke('hubDrag', dx, dy);
+    if (press.drag) {
+      T.invoke('hubDrag', dx, dy);
+      if (S.mode !== 'browse' && press.el) {            // на экранах окно не двигается: двигаем саму кнопку
+        press.el.style.left = (press.l + dx) + 'px';
+        press.el.style.top = (press.t + dy) + 'px';
+      }
+    }
     return;
   }
   if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) { clearTimeout(press.timer); press = null; clearDown(); }
@@ -536,18 +536,22 @@ function onLong(p) {
 }
 
 function hubTap(p) {
+  if (ringOpen) { closeRing(); return; }
+  const panel = S.mode === 'panel';
+  const label = panel ? 'К странице' : 'Вкладки';
   if (S.voice === 1) {                                // тап озвучивает, двойной тап открывает веер
     const now = Date.now();
     if (hubLast && now - hubLast < 600) { hubLast = 0; openRing(); return; }
     hubLast = now;
-    sayLabel('Вкладки', p.rect, true);
+    sayLabel(label, p.rect, true);
     return;
   }
-  act('tabs', {});
-  if (S.voice === 2) sayLabel('Вкладки', p.rect, false);
+  act(panel ? 'close' : 'tabs', {});                  // на панели вкладок возвращает к странице
+  if (S.voice === 2) sayLabel(label, p.rect, false);
 }
 function hubLong(p) {
-  if (S.voice === 1) { act('tabs', {}); return; }     // озвучка 1: долгое нажатие выполняет основное действие
+  if (ringOpen) return;
+  if (S.voice === 1) { act(S.mode === 'panel' ? 'close' : 'tabs', {}); return; }   // озвучка 1: долгое нажатие выполняет основное действие
   openRing();
   if (S.voice === 2) sayLabel('Меню', p.rect, false);
 }
