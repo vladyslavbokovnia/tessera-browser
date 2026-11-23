@@ -56,6 +56,7 @@ const defaultConfig = {
   disabledScripts: [],
   voice: 2,       // 0 выкл, 1 тап озвучивает / долгое нажатие действует, 2 действие + голос
   ttsRate: 170,   // слов в минуту для espeak
+  hub: { fx: 0.5, fy: 0.5 }, // центр плавающей кнопки в долях окна (по умолчанию в центре экрана)
 };
 const cfg = Object.assign({}, defaultConfig, readJSON(F.config, {}));
 if (!Array.isArray(cfg.profiles) || !cfg.profiles.length) cfg.profiles = defaultConfig.profiles;
@@ -67,8 +68,32 @@ const saveBookmarks = debounce(() => writeJSON(F.bookmarks, bookmarks), 300);
 const saveHistory = debounce(() => writeJSON(F.history, history), 2000);
 
 // ---------- состояние ----------
-const BAR_H = 80;
-let uiExtra = 0; // временный запас над панелью под подсказку
+const HUB = 78;          // сторона окна интерфейса вокруг плавающей кнопки
+let uiExtra = 0;        // временный запас рядом с кнопкой под подсказку
+let hubHidden = false;  // кнопка спрятана прокруткой страницы
+let hubDrag = null;     // центр кнопки в начале перетаскивания
+let hubTimer = null;
+// Следит за прокруткой страницы: вниз прячет кнопку, вверх возвращает. Сообщает через console.log с меткой.
+const SCROLL_JS = `(() => {
+  if (window.__tsHub) return;
+  window.__tsHub = 1;
+  const last = new WeakMap();
+  let acc = 0, sent = 0;
+  const say = (v) => { const n = Date.now(); if (v === '0' || n - sent > 300) { sent = n; console.log('__ts_hub__' + v); } };
+  addEventListener('scroll', (e) => {
+    const t = e.target === document ? document.scrollingElement : e.target;
+    if (!t || typeof t.scrollTop !== 'number') return;
+    const y = t.scrollTop;
+    const d = y - (last.has(t) ? last.get(t) : y);
+    last.set(t, y);
+    if (!d) return;
+    if ((d > 0) !== (acc > 0)) acc = 0;
+    acc += d;
+    if (t === document.scrollingElement && y <= 8) { acc = 0; say('0'); }
+    else if (acc > 24) say('1');
+    else if (acc < -24) say('0');
+  }, true);
+})();`;
 const ERR_PREFIX = 'data:text/html;charset=utf-8,' + encodeURIComponent('<!--tessera-error-->').slice(0, 40);
 
 let win = null;
@@ -355,6 +380,12 @@ function wire(tab) {
     tab.url = url;
     wc.loadURL(errorPage(url, desc + ' (' + code + ')')).catch(() => {});
   });
+  wc.on('dom-ready', () => { wc.executeJavaScript(SCROLL_JS).catch(() => {}); });
+  wc.on('console-message', (_e, _level, message) => {
+    if (tab.id !== activeId || mode !== 'browse' || typeof message !== 'string' || !message.startsWith('__ts_hub__')) return;
+    setHubHidden(message.endsWith('1'));
+  });
+  wc.on('did-navigate', () => { if (tab.id === activeId && hubHidden) setHubHidden(false); });
   wc.on('render-process-gone', () => { tab.crashed = true; tab.loading = false; push(); });
   wc.setWindowOpenHandler(({ url, disposition }) => {
     if (/^(https?|file):/i.test(url)) {
@@ -416,6 +447,8 @@ async function selectTab(id) {
   // скрытую вкладку снимать бесполезно: снимок делается только пока она видна
   if (prev && prev.id !== id && (mode === 'browse' || mode === 'sheet')) await captureThumb(prev);
   activeId = id;
+  hubHidden = false;
+  clearTimeout(hubTimer);
   tab.crashed = false;
   ensureView(tab);
   if (tab.view && tab.crashed === false && tab.view.webContents.isCrashed()) tab.view.webContents.reload();
@@ -476,6 +509,49 @@ function doNav(action) {
 }
 
 // ---------- раскладка ----------
+// Центр плавающей кнопки хранится в долях окна, чтобы переживать смену размера.
+function hubCenter(w, h) {
+  const p = cfg.hub || { fx: 0.5, fy: 0.5 };
+  const cx = Math.round(Math.min(w - HUB / 2, Math.max(HUB / 2, p.fx * w)));
+  const cy = Math.round(Math.min(h - HUB / 2, Math.max(HUB / 2, p.fy * h)));
+  return { cx, cy };
+}
+// На странице интерфейс занимает только квадрат вокруг кнопки (плюс место под подсказку), остальное отдано странице.
+function hubBounds(w, h) {
+  const { cx, cy } = hubCenter(w, h);
+  const top = cy - HUB / 2;
+  let bw = HUB, bh = HUB, x = cx - HUB / 2, y = top, below = false;
+  if (uiExtra > 0) {
+    bw = Math.min(w, 300);
+    bh = HUB + uiExtra;
+    below = top < uiExtra + 4;
+    x = Math.min(Math.max(0, cx - bw / 2), w - bw);
+    y = Math.min(Math.max(0, below ? top : top - uiExtra), h - bh);
+  }
+  return {
+    x: Math.round(x), y: Math.round(y), width: Math.round(bw), height: Math.round(bh), below,
+    ox: Math.round(cx - HUB / 2 - x), oy: Math.round(top - y),
+  };
+}
+function hubInfo() {
+  if (!win) return null;
+  const [w, h] = win.getContentSize();
+  const { cx, cy } = hubCenter(w, h);
+  if (mode === 'browse') {
+    const b = hubBounds(w, h);
+    return { cx, cy, ox: b.ox, oy: b.oy, below: b.below };
+  }
+  return { cx, cy, ox: cx - HUB / 2, oy: cy - HUB / 2, below: false };
+}
+function setHubHidden(v) {
+  clearTimeout(hubTimer);
+  if (v) hubTimer = setTimeout(() => setHubHidden(false), 2500); // перестали листать: кнопка возвращается
+  if (hubHidden === v) return;
+  hubHidden = v;
+  push();
+  if (v) setTimeout(layout, 170); else layout();
+}
+
 function layout() {
   if (!win || !ui) return;
   const [w, h] = win.getContentSize();
@@ -485,15 +561,17 @@ function layout() {
     if (!t.view) continue;
     const show = visibleTabs && t.id === activeId;
     t.view.setVisible(show);
-    if (htmlFull && show) t.view.setBounds({ x: 0, y: 0, width: w, height: h });
-    else t.view.setBounds({ x: 0, y: 0, width: w, height: Math.max(0, h - BAR_H) });
+    t.view.setBounds({ x: 0, y: 0, width: w, height: h });
   }
   if (htmlFull && visibleTabs && active && active.view) {
     ui.setVisible(false);
+  } else if (mode === 'browse') {
+    const b = hubBounds(w, h);
+    ui.setVisible(!hubHidden);
+    ui.setBounds({ x: b.x, y: b.y, width: b.width, height: b.height });
   } else {
     ui.setVisible(true);
-    if (mode === 'browse') ui.setBounds({ x: 0, y: h - BAR_H - uiExtra, width: w, height: BAR_H + uiExtra });
-    else ui.setBounds({ x: 0, y: 0, width: w, height: h });
+    ui.setBounds({ x: 0, y: 0, width: w, height: h });
   }
 }
 
@@ -504,6 +582,8 @@ async function setMode(m, opts = {}) {
   }
   if (m === 'omnibox') omniNewTab = !!opts.newTab;
   if (m !== 'sheet') ctxData = null;
+  hubHidden = false;
+  clearTimeout(hubTimer);
   mode = m;
   layout();
   push();
@@ -542,6 +622,8 @@ function snapshot() {
     desktop: a ? a.desktop : false,
     zoom: a ? a.zoom : 1,
     doubleTapMs: cfg.doubleTapMs,
+    hub: hubInfo(),
+    hubHidden,
     voice: cfg.voice,
     speaking: reading && !!ttsProc,
     tts: !!ttsCmd,
@@ -614,7 +696,22 @@ function uiHandle(name, fn) {
 uiHandle('speak', (text) => speak(String(text || '').slice(0, 600)));
 uiHandle('stopSpeak', () => stopSpeak());
 uiHandle('voice', (v) => { cfg.voice = [0, 1, 2].includes(v) ? v : 2; saveCfg(); push(); });
-uiHandle('extra', (px) => { uiExtra = Math.max(0, Math.min(120, px | 0)); layout(); });
+uiHandle('extra', (px) => { uiExtra = Math.max(0, Math.min(120, px | 0)); layout(); push(); });
+uiHandle('hubDragStart', () => {
+  if (!win) return;
+  const [w, h] = win.getContentSize();
+  hubDrag = hubCenter(w, h);
+});
+uiHandle('hubDrag', (dx, dy) => {
+  if (!win || !hubDrag) return;
+  const [w, h] = win.getContentSize();
+  cfg.hub = {
+    fx: Math.min(1, Math.max(0, (hubDrag.cx + Number(dx || 0)) / w)),
+    fy: Math.min(1, Math.max(0, (hubDrag.cy + Number(dy || 0)) / h)),
+  };
+  layout();
+});
+uiHandle('hubDrop', () => { hubDrag = null; saveCfg(); push(); });
 uiHandle('readPage', async () => {
   if (reading) { stopSpeak(); return; }
   const a = tabById(activeId);
@@ -775,7 +872,7 @@ function createWindow() {
   ui.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   ui.webContents.on('will-navigate', (e) => e.preventDefault());
 
-  win.on('resize', layout);
+  win.on('resize', () => { layout(); push(); });
   win.on('maximize', layout);
   win.on('unmaximize', layout);
   win.on('enter-full-screen', layout);
