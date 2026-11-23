@@ -14,6 +14,8 @@ let omni = { q: '', profile: null, newTab: false };
 let sugTimer = null;
 let tipTimer = null;
 let extraOn = false;
+let hubDragging = false;  // кнопку тащат: интерфейс не перерисовываем
+let hubLast = 0;          // прошлое касание кнопки (озвучка 1: двойное касание открывает веер)
 
 // ---------- иконки (Material, 24x24) ----------
 const P = {
@@ -88,76 +90,134 @@ function ibtn(a, icon, say, { cls = '', extra = '' } = {}) {
 function voiceBtnCls() { return S.voice === 1 ? 'm1' : (S.voice === 0 ? 'off-voice' : ''); }
 const voiceIcon = () => (S.voice === 0 ? I.volOff : I.volOn);
 
-// ---------- нижняя панель ----------
-function barHTML(variant) {
-  const a = activeTab();
-  const p = profile(a && a.profile);
-  const host = hostOf(a && a.url);
-  const fav = face('fav', a && a.favicon, host);
+// ---------- нижняя панель: только на панели вкладок ----------
+function barHTML() {
   const hub = `<button class="hub${ringOpen ? ' open' : ''}" data-a="hub" data-say="Меню">${HUB}</button>`;
-  if (variant === 'panel') {
-    return `<div class="bar">
-      ${ibtn('newtab', NEWTAB, 'Новая вкладка')}
-      ${ibtn('closed', I.history, 'Закрытые вкладки')}
-      ${hub}
-      ${ibtn('voice', voiceIcon(), VOICE_SAY[S.voice], { cls: voiceBtnCls() })}
-      ${ibtn('close', I.down, 'К странице')}
-    </div>`;
-  }
-  const site = `<button class="ib site" data-a="omni" data-say="${esc(titleOf(a))}">${fav}<i class="pdot" style="background:${esc(p.color)}"></i>${S.loading ? '<i class="ring"></i>' : ''}</button>`;
   return `<div class="bar">
-    ${ibtn('back', I.back, 'Назад', { cls: S.canBack ? '' : 'off' })}
-    ${site}
+    ${ibtn('newtab', NEWTAB, 'Новая вкладка')}
+    ${ibtn('closed', I.history, 'Закрытые вкладки')}
     ${hub}
-    ${ibtn('tabs', `<span class="cnt">${S.tabs.length}</span>`, 'Вкладки: ' + S.tabs.length)}
-    ${ibtn('m-forward', I.fwd, 'Вперёд', { cls: S.canFwd ? '' : 'off' })}
+    ${ibtn('voice', voiceIcon(), VOICE_SAY[S.voice], { cls: voiceBtnCls() })}
+    ${ibtn('close', I.down, 'К странице')}
   </div>`;
 }
 
-// ---------- веер вокруг центральной кнопки ----------
+// ---------- плавающая кнопка на странице (как в браузере универсального приложения) ----------
+// Нажатие открывает вкладки, долгое нажатие открывает веер, перетаскивание двигает кнопку, при прокрутке она гаснет.
+function hubG() {
+  if (S.hub) return S.hub;
+  const W = window.innerWidth || 460, H = window.innerHeight || 880;      // превью без главного процесса: кнопка внизу по центру
+  return { cx: W / 2, cy: H - 40, ox: W / 2 - 39, oy: H - 78, below: false };
+}
+function hubFloatHTML() {
+  const g = hubG();
+  const a = activeTab();
+  const p = profile(a && a.profile);
+  return `<button class="hub float${S.hubHidden ? ' hidden' : ''}" style="left:${g.ox + 5}px;top:${g.oy + 5}px" data-a="hubf" data-say="Вкладки">${HUB}${S.loading ? '<i class="hring"></i>' : ''}<i class="pdot" style="background:${esc(p.color)}"></i></button>`;
+}
+function hubRingHTML() {
+  const g = hubG();
+  return `<button class="hub float open" style="left:${g.ox + 5}px;top:${g.oy + 5}px" data-a="hub" data-say="Меню">${HUB}</button>`;
+}
+function updateHub(hb) {
+  const g = hubG();
+  hb.style.left = (g.ox + 5) + 'px';
+  hb.style.top = (g.oy + 5) + 'px';
+  hb.classList.toggle('hidden', !!S.hubHidden);
+  const r = hb.querySelector('.hring');
+  if (S.loading && !r) hb.insertAdjacentHTML('beforeend', '<i class="hring"></i>');
+  else if (!S.loading && r) r.remove();
+  const a = activeTab();
+  const dot = hb.querySelector('.pdot');
+  if (dot && a) dot.style.background = profile(a.profile).color;
+}
+
+// ---------- веер вокруг кнопки ----------
 function ringItems() {
   const cmds = S.commands || [];
   const voice = ['voice', voiceIcon(), VOICE_SAY[S.voice], { cls: voiceBtnCls() }];
   if (S.mode === 'panel') {
-    return {
-      inner: [['newtab', NEWTAB, 'Новая вкладка'], ['closed', I.history, 'Закрытые вкладки'], ['m-bms', I.bms, 'Закладки']],
-      outer: [['m-scripts', I.code, 'Скрипты'], voice],
-    };
+    return [['newtab', NEWTAB, 'Новая вкладка'], ['closed', I.history, 'Закрытые вкладки'], ['m-bms', I.bms, 'Закладки'], ['m-scripts', I.code, 'Скрипты'], voice];
   }
-  return {
-    inner: [
-      S.loading ? ['m-reload', I.close, 'Остановить'] : ['m-reload', I.reload, 'Обновить'],
-      ['m-bm', I.star, S.bookmarked ? 'Убрать из закладок' : 'В закладки', { cls: S.bookmarked ? 'on' : '' }],
-      ['newtab', NEWTAB, 'Новая вкладка'],
-      ['m-read', S.speaking ? I.stop : I.play, S.speaking ? 'Остановить чтение' : 'Читать страницу', { cls: S.speaking ? 'on' : '' }],
-      voice,
-    ],
-    outer: [
-      ['m-bms', I.bms, 'Закладки'],
-      ['m-scripts', I.code, 'Скрипты' + (cmds.length ? ', команд: ' + cmds.length : '')],
-      ['m-desktop', I.desktop, S.desktop ? 'Мобильная версия' : 'Версия для компьютера', { cls: S.desktop ? 'on' : '' }],
-      ['m-zoomout', I.zoomOut, 'Масштаб меньше'],
-      ['m-zoomin', I.zoomIn, 'Масштаб больше'],
-      ['m-copy', I.copy, 'Копировать ссылку'],
-    ],
-  };
+  return [
+    S.loading ? ['m-reload', I.close, 'Остановить'] : ['m-reload', I.reload, 'Обновить'],
+    ['back', I.back, 'Назад', { cls: S.canBack ? '' : 'off' }],
+    ['m-forward', I.fwd, 'Вперёд', { cls: S.canFwd ? '' : 'off' }],
+    ['omni', I.search, 'Адрес и поиск'],
+    ['newtab', NEWTAB, 'Новая вкладка'],
+    ['m-bm', I.star, S.bookmarked ? 'Убрать из закладок' : 'В закладки', { cls: S.bookmarked ? 'on' : '' }],
+    ['tabs', `<span class="cnt">${S.tabs.length}</span>`, 'Вкладки: ' + S.tabs.length],
+    ['m-read', S.speaking ? I.stop : I.play, S.speaking ? 'Остановить чтение' : 'Читать страницу', { cls: S.speaking ? 'on' : '' }],
+    voice,
+    ['m-bms', I.bms, 'Закладки'],
+    ['m-scripts', I.code, 'Скрипты' + (cmds.length ? ', команд: ' + cmds.length : '')],
+    ['m-desktop', I.desktop, S.desktop ? 'Мобильная версия' : 'Версия для компьютера', { cls: S.desktop ? 'on' : '' }],
+    ['m-zoomout', I.zoomOut, 'Масштаб меньше'],
+    ['m-zoomin', I.zoomIn, 'Масштаб больше'],
+    ['m-copy', I.copy, 'Копировать ссылку'],
+  ];
+}
+
+// Кольца значков вокруг кнопки. Где кольцо уходит за край экрана, значки ложатся на самую длинную дугу в пределах экрана.
+function ringLayout(count, cx, cy, W, H) {
+  const M = 32, STEP = 4, GAP = 60;
+  const out = [];
+  let left = count;
+  for (let k = 0; left > 0 && k < 5; k++) {
+    const r = 92 + 68 * k;
+    const cap = k === 0 ? 6 : 10;
+    const ok = [];
+    for (let a = 0; a < 360; a += STEP) {
+      const x = cx + r * Math.cos(a * Math.PI / 180);
+      const y = cy - r * Math.sin(a * Math.PI / 180);
+      ok.push(x >= M && x <= W - M && y >= M && y <= H - M);
+    }
+    const n = ok.length;
+    const angles = [];                                   // градусы, от большего к меньшему (слева направо вверху)
+    if (ok.every(Boolean)) {
+      const m = Math.min(left, cap);
+      const start = 90 + (k % 2 ? 180 / m : 0);
+      for (let i = 0; i < m; i++) angles.push(start - i * 360 / m);
+    } else {
+      let bestStart = -1, bestLen = 0;
+      for (let s0 = 0; s0 < n; s0++) {
+        if (!ok[s0] || ok[(s0 - 1 + n) % n]) continue;   // начало дуги (дуга может переходить через 0)
+        let len = 0;
+        while (len < n && ok[(s0 + len) % n]) len++;
+        if (len > bestLen) { bestLen = len; bestStart = s0; }
+      }
+      if (bestStart >= 0) {
+        const span = (bestLen - 1) * STEP;
+        const arcLen = r * span * Math.PI / 180;
+        const m = Math.min(left, cap, Math.floor(arcLen / GAP) + 1);
+        if (m > 0) {
+          const mid = bestStart * STEP + span / 2;
+          const stepA = m > 1 ? Math.min(span / (m - 1), GAP * 1.4 / r * 180 / Math.PI) : 0;
+          const first = mid + stepA * (m - 1) / 2;
+          for (let i = 0; i < m; i++) angles.push(first - i * stepA);
+        }
+      }
+    }
+    for (const a of angles) {
+      out.push({ dx: Math.round(r * Math.cos(a * Math.PI / 180)), dy: Math.round(-r * Math.sin(a * Math.PI / 180)), k });
+    }
+    left -= angles.length;
+  }
+  return out;
 }
 
 function ringHTML() {
-  const it = ringItems();
+  const list = ringItems();
   const W = window.innerWidth || 460;
-  // дуги не должны заходить на кнопки нижней панели: центр кнопки выше 58px от центра хаба
-  const ro = Math.min(180, (W / 2 - 32) / Math.cos(20 * Math.PI / 180));
-  const rin = Math.max(96, Math.min(112, ro * 0.62));
-  const arc = (list, r, step, minAng, base) => list.map((x, i) => {
-    const n = list.length;
-    const span = Math.min(180 - 2 * minAng, (n - 1) * step);
-    const ang = (n === 1 ? 90 : 90 + span / 2 - span * i / (n - 1)) * Math.PI / 180;
+  const H = window.innerHeight || 880;
+  const c = S.mode === 'panel' ? { x: W / 2, y: H - 40 } : { x: hubG().cx, y: hubG().cy };
+  const pos = ringLayout(list.length, c.x, c.y, W, H);
+  const btns = pos.map((p, i) => {
+    const x = list[i];
     const opt = x[3] || {};
-    return `<button class="ri gl${ringFresh ? ' pre' : ''} ${opt.cls || ''}" style="--x:${Math.round(r * Math.cos(ang))}px;--y:${Math.round(r * Math.sin(ang))}px;--d:${base + i * 24}ms" data-a="${x[0]}" data-say="${esc(x[2])}">${x[1]}</button>`;
+    return `<button class="ri gl${ringFresh ? ' pre' : ''} ${opt.cls || ''}" style="left:${c.x}px;top:${c.y}px;--x:${p.dx}px;--y:${p.dy}px;--d:${p.k * 50 + (i % 6) * 18}ms" data-a="${x[0]}" data-say="${esc(x[2])}">${x[1]}</button>`;
   }).join('');
-  return `<div class="backdrop" data-a="close-ring" data-direct="1"></div><div class="glow"></div>`
-    + arc(it.inner, rin, 28, 35, 0) + arc(it.outer, ro, 28, 20, 60);
+  return `<div class="backdrop" data-a="close-ring" data-direct="1"></div><div class="glow" style="left:${c.x}px;top:${c.y}px"></div>` + btns;
 }
 
 // ---------- вкладки ----------
@@ -225,7 +285,7 @@ function ctxHTML() {
   if (c.srcURL) h += `<div class="acts">${actBtn('c-img-new', I.image, 'Открыть картинку')}${actBtn('c-img-copy', I.copy, 'Копировать адрес картинки')}</div>`;
   if (c.selectionText) h += `<div class="acts">${actBtn('c-sel-copy', I.copy, 'Копировать текст')}${actBtn('c-sel-search', I.search, 'Искать в сети')}</div>`;
   if (c.isEditable) h += `<div class="acts">${actBtn('c-paste', I.paste, 'Вставить')}</div>`;
-  return `<div class="backdrop" data-a="close-ring" data-direct="1"></div><div class="sheet">${h}</div>${barHTML('browse')}`;
+  return `<div class="backdrop" data-a="close-ring" data-direct="1"></div><div class="sheet" style="bottom:28px">${h}</div>`;
 }
 
 function scriptsHTML() {
@@ -274,10 +334,14 @@ function kindOf() {
 }
 
 function render(force) {
-  if (!S) return;
+  if (!S || hubDragging) return;
   const kind = kindOf();
   if (kind === 'ring') ringOpen = true;
   else if (kind !== 'panel') ringOpen = false;
+  if (!force && kind === 'browse' && rendered === 'browse' && !overlay) {
+    const hb = app.querySelector('.hub.float');
+    if (hb) { updateHub(hb); return; }
+  }
   if (!force && overlay && overlay.type === 'ask' && rendered === kind) return;
   if (!force && kind === 'omnibox' && rendered === 'omnibox' && !overlay) {
     const c = document.getElementById('chips');
@@ -291,8 +355,8 @@ function render(force) {
   const ring = ringOpen && (kind === 'ring' || kind === 'panel') ? ringHTML() : '';
 
   switch (kind) {
-    case 'browse': app.innerHTML = barHTML('browse'); break;
-    case 'ring': app.innerHTML = ring + barHTML('browse'); break;
+    case 'browse': app.innerHTML = hubFloatHTML(); break;
+    case 'ring': app.innerHTML = ring + hubRingHTML(); break;
     case 'ctx': app.innerHTML = ctxHTML(); break;
     case 'panel': app.innerHTML = panelBody() + ring + barHTML('panel') + '</div>'; break;
     case 'omnibox': {
@@ -355,13 +419,13 @@ function hideTip() {
   tipEl.classList.remove('show');
   if (extraOn) { extraOn = false; T.invoke('extra', 0); }
 }
-function showTip(text, rect) {
-  if (!text) return;
-  tipEl.textContent = text;
+function placeTip(rect) {
   const W = window.innerWidth || 460;
   if (S && S.mode === 'browse') {
-    if (!extraOn) { extraOn = true; T.invoke('extra', 64); }
-    tipEl.style.top = 'auto'; tipEl.style.bottom = '92px'; tipEl.style.left = (W / 2) + 'px';
+    const g = hubG();
+    tipEl.style.left = (g.ox + 39) + 'px';
+    if (g.below) { tipEl.style.bottom = 'auto'; tipEl.style.top = (g.oy + 86) + 'px'; }
+    else { tipEl.style.top = 'auto'; tipEl.style.bottom = '86px'; }
   } else if (rect) {
     const y = rect.top - 52;
     tipEl.style.bottom = 'auto';
@@ -373,6 +437,17 @@ function showTip(text, rect) {
   tipEl.classList.add('show');
   clearTimeout(tipTimer);
   tipTimer = setTimeout(hideTip, 1900);
+}
+function showTip(text, rect) {
+  if (!text) return;
+  tipEl.textContent = text;
+  if (S && S.mode === 'browse' && !extraOn) {
+    // на странице окно интерфейса только размером с кнопку: сначала просим место под подсказку
+    extraOn = true;
+    T.invoke('extra', 64).then(() => T.invoke('state')).then((st) => { if (st) S = st; placeTip(rect); });
+    return;
+  }
+  placeTip(rect);
 }
 function sayLabel(text, rect, withTip) {
   if (withTip) showTip(text, rect);
@@ -392,29 +467,49 @@ app.addEventListener('pointerdown', (e) => {
   if (e.target.closest('input')) return;
   const el = e.target.closest('[data-a],[data-tab],[data-bm]');
   if (!el) return;
-  const kind = el.dataset.tab !== undefined ? 'tab' : (el.dataset.bm !== undefined ? 'bm' : 'a');
+  const kind = el.dataset.tab !== undefined ? 'tab' : (el.dataset.bm !== undefined ? 'bm' : (el.dataset.a === 'hubf' ? 'hubf' : 'a'));
   press = {
-    kind, d: Object.assign({}, el.dataset), rect: el.getBoundingClientRect(), x: e.clientX, y: e.clientY, long: false,
+    kind, d: Object.assign({}, el.dataset), rect: el.getBoundingClientRect(), x: e.clientX, y: e.clientY,
+    sx: e.screenX, sy: e.screenY, long: false, drag: false,
     timer: setTimeout(() => { if (press) { press.long = true; onLong(press); } }, LONG),
   };
+  if (kind === 'hubf') { try { el.setPointerCapture(e.pointerId); } catch (err) { /* без захвата */ } }
   el.classList.add('down');
 });
 app.addEventListener('pointermove', (e) => {
-  if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) { clearTimeout(press.timer); press = null; clearDown(); }
+  if (!press) return;
+  if (press.kind === 'hubf') {
+    // кнопку двигаем по экранным координатам: окно интерфейса само движется вместе с кнопкой
+    const dx = e.screenX - press.sx, dy = e.screenY - press.sy;
+    if (!press.drag && Math.hypot(dx, dy) > 12) {
+      press.drag = true; hubDragging = true;
+      clearTimeout(press.timer); clearDown();
+      T.invoke('hubDragStart');
+    }
+    if (press.drag) T.invoke('hubDrag', dx, dy);
+    return;
+  }
+  if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) { clearTimeout(press.timer); press = null; clearDown(); }
 });
-app.addEventListener('pointercancel', () => { if (press) clearTimeout(press.timer); press = null; clearDown(); });
+function endHubDrag() { hubDragging = false; T.invoke('hubDrop'); }
+app.addEventListener('pointercancel', () => {
+  if (press) { clearTimeout(press.timer); if (press.drag) endHubDrag(); }
+  press = null; clearDown();
+});
 app.addEventListener('pointerup', () => {
   clearDown();
   if (!press) return;
   clearTimeout(press.timer);
   const p = press;
   press = null;
+  if (p.drag) { endHubDrag(); return; }
   if (!p.long) onTap(p);
 });
 function clearDown() { app.querySelectorAll('.down').forEach((x) => x.classList.remove('down')); }
 
 function onTap(p) {
   const d = p.d;
+  if (p.kind === 'hubf') return hubTap(p);
   if (p.kind === 'tab') return tabTap(Number(d.tab));
   if (p.kind === 'bm') {
     const url = decodeURIComponent(d.bm);
@@ -430,6 +525,7 @@ function onTap(p) {
 
 function onLong(p) {
   const d = p.d;
+  if (p.kind === 'hubf') return hubLong(p);
   if (p.kind === 'tab') return cardMenu(Number(d.tab));
   if (p.kind === 'bm') {
     return showActions(d.t, [{ icon: I.close, label: 'Удалить закладку', danger: true, fn: () => { T.invoke('bmRemove', decodeURIComponent(d.bm)).then(() => { rendered = ''; render(); }); } }]);
@@ -437,6 +533,23 @@ function onLong(p) {
   if (d.direct === '1' || !d.say) return;
   if (S.voice === 1) { act(d.a, d); return; }                      // долгое нажатие выполняет
   sayLabel(d.say, p.rect, true);                                    // иначе подсказка с названием
+}
+
+function hubTap(p) {
+  if (S.voice === 1) {                                // тап озвучивает, двойной тап открывает веер
+    const now = Date.now();
+    if (hubLast && now - hubLast < 600) { hubLast = 0; openRing(); return; }
+    hubLast = now;
+    sayLabel('Вкладки', p.rect, true);
+    return;
+  }
+  act('tabs', {});
+  if (S.voice === 2) sayLabel('Вкладки', p.rect, false);
+}
+function hubLong(p) {
+  if (S.voice === 1) { act('tabs', {}); return; }     // озвучка 1: долгое нажатие выполняет основное действие
+  openRing();
+  if (S.voice === 2) sayLabel('Меню', p.rect, false);
 }
 
 function tabTap(id) {
@@ -487,8 +600,8 @@ function act(a, d) {
   switch (a) {
     case 'hub': if (ringOpen) closeRing(); else openRing(); break;
     case 'close-ring': ringOpen = false; if (S.ctx) T.invoke('mode', 'browse'); else closeRing(); break;
-    case 'back': T.invoke('nav', 'back'); break;
-    case 'm-forward': T.invoke('nav', 'forward'); break;
+    case 'back': ringOpen = false; T.invoke('nav', 'back'); T.invoke('mode', 'browse'); break;
+    case 'm-forward': ringOpen = false; T.invoke('nav', 'forward'); T.invoke('mode', 'browse'); break;
     case 'omni': T.invoke('mode', 'omnibox', { newTab: false }); break;
     case 'tabs': ringOpen = false; T.invoke('thumbs').then((m) => { Object.assign(thumbs, m || {}); T.invoke('mode', 'panel'); }); break;
     case 'close': ringOpen = false; T.invoke('mode', 'browse'); break;
