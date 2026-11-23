@@ -1,0 +1,15 @@
+/* Плавающая кнопка и веер вокруг неё (как в браузере универсального приложения) */
+.hub.float {
+  position: absolute; opacity: .62; touch-action: none;
+  box-shadow: 0 0 0 2px rgba(122,162,255,.55), inset 0 1px 1px rgba(255,255,255,.25);
+  transition: opacity .15s, transform .12s, box-shadow .2s;
+}
+.hub.float.open { opacity: 1; box-shadow: 0 0 0 3px var(--acc); }
+.hub.float.hidden { opacity: 0; pointer-events: none; }
+.hub .pdot { position: absolute; right: 8px; bottom: 8px; width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--bg); }
+.hub .hring { position: absolute; inset: -4px; border-radius: 50%; border: 3px solid transparent; border-top-color: var(--acc); animation: spin .8s linear infinite; }
+
+/* значки веера стоят вокруг центра кнопки: left/top задаёт скрипт, смещение — --x и --y */
+.ri { bottom: auto; transform: translate(calc(-50% + var(--x)), calc(-50% + var(--y))); }
+.ri.pre { transform: translate(-50%, -50%) scale(.2); opacity: 0; }
+.glow { bottom: auto; transform: translate(-50%, -50%); }
